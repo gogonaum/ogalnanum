@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>[04:10 KST 예약 테스트] 비트코인 블록 추첨기</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; line-height: 1.6; }
+    .container { max-width: 800px; margin: 0 auto; background: #1e293b; padding: 25px; border-radius: 12px; }
+    h1 { color: #38bdf8; font-size: 1.3rem; margin-top: 0; border-bottom: 2px solid #334155; padding-bottom: 10px; }
+    .status-box { background: #0f172a; padding: 15px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #38bdf8; }
+    .log-box { background: #020617; color: #a5f3fc; padding: 15px; border-radius: 8px; font-family: monospace; white-space: pre-wrap; word-break: break-all; max-height: 350px; overflow-y: auto; font-size: 0.88rem; }
+    .winner-card { background: #064e3b; border: 1px solid #10b981; padding: 15px; border-radius: 8px; margin-top: 15px; }
+    .winner-title { font-weight: bold; color: #34d399; font-size: 1.1rem; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; background: #3b82f6; color: white; }
+    .warn-badge { background: #f59e0b; color: #000; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h1>[예약 테스트] 비트코인 블록 자동 감지 및 추첨</h1>
+  <p>2026-10-04 04:10:00 KST 이후 채굴되는 최초 블록(2 컨펌 이상)을 자동 감지하여 추첨합니다.</p>
+
+  <div class="status-box">
+    <div><strong>기준 시각:</strong> 2026-10-04 04:10:00 KST (2026-10-03 19:10:00 UTC) 이상</div>
+    <div><strong>현재 상태:</strong> <span id="status-text" class="badge">모니터링 대기 중...</span></div>
+    <div id="block-info" style="margin-top: 8px;"></div>
+  </div>
+
+  <div id="winner-area" style="display:none;" class="winner-card">
+    <div class="winner-title">🎉 [테스트 성공] 당첨자 선출 확인</div>
+    <div id="winner-list" style="margin-top: 8px; font-size: 1.05rem;"></div>
+  </div>
+
+  <h3>실시간 처리 로그</h3>
+  <div id="log" class="log-box">시스템 초기화 완료. 체인 모니터링 시작...</div>
+</div>
+
+<script>
+const participants = [
+  { id: 1, name: "페드로포로 (assist0867)", coins: 1 },
+  { id: 2, name: "ㅇㅇ (ruler2844)", coins: 2 },
+  { id: 3, name: "glasss (ygbeastd)", coins: 1 },
+  { id: 4, name: "ㅇㅇ (strength9633)", coins: 1 },
+  { id: 5, name: "어떻게든돼라~! (gasoline9685)", coins: 1 },
+  { id: 6, name: "ㅇㅇ (weathering7635)", coins: 1 }
+];
+
+let tickets = [];
+participants.forEach(p => {
+  for (let i = 0; i < p.coins; i++) tickets.push(p);
+});
+
+const totalTickets = tickets.length;
+const binSize = Math.floor(256 / totalTickets);
+const maxValid = binSize * totalTickets;
+
+// 2026-10-04 04:10:00 KST = 2026-10-03 19:10:00 UTC
+const TARGET_UNIX_TIMESTAMP = 1791054600;
+
+function appendLog(msg) {
+  const logEl = document.getElementById("log");
+  logEl.textContent += "\n" + msg;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function sha256(asciiStr) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(asciiStr);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function executeLottery(blockHash) {
+  appendLog("\n=== [추첨 연산 시작] ===");
+  appendLog(`기준 블록 원본 해시: ${blockHash}`);
+
+  let roundHash = await sha256(blockHash);
+  appendLog(`편향 제거 파생 해시: ${roundHash}`);
+
+  let currentBytes = [];
+  for (let i = 0; i < roundHash.length; i += 2) {
+    currentBytes.push(roundHash.substring(i, i + 2));
+  }
+  appendLog(`초기 바이트 스트림: ${currentBytes.join(" ")}\n`);
+
+  let winners = [];
+  let winnerIds = new Set();
+  let step = 1;
+
+  while (winners.length < 2) {
+    if (currentBytes.length === 0) {
+      roundHash = await sha256(roundHash);
+      for (let i = 0; i < roundHash.length; i += 2) {
+        currentBytes.push(roundHash.substring(i, i + 2));
+      }
+      appendLog(`[알림] 바이트 소진: SHA-256 확장 -> ${roundHash}`);
+    }
+
+    const bHex = currentBytes.shift();
+    const val = parseInt(bHex, 16);
+
+    if (val >= maxValid) {
+      appendLog(`Step ${String(step).padStart(2, "0")}: 0x${bHex} (${String(val).padStart(3, " ")}) -> 무효 구간(252~255) 패스`);
+      step++;
+      continue;
+    }
+
+    const ticketIdx = Math.floor(val / binSize);
+    const selectedPerson = tickets[ticketIdx];
+    const pId = selectedPerson.id;
+
+    if (winnerIds.has(pId)) {
+      appendLog(`Step ${String(step).padStart(2, "0")}: 0x${bHex} (${String(val).padStart(3, " ")}) -> 응모권 ${ticketIdx + 1}번 (${selectedPerson.name}) -> 기존 당첨자 중복 패스`);
+      step++;
+      continue;
+    }
+
+    winners.push(selectedPerson);
+    winnerIds.add(pId);
+    const rank = winners.length;
+    appendLog(`Step ${String(step).padStart(2, "0")}: 0x${bHex} (${String(val).padStart(3, " ")}) -> 응모권 ${ticketIdx + 1}번 당첨! [${rank}등: ${selectedPerson.name}]`);
+    step++;
+  }
+
+  appendLog("\n=== [테스트 최종 결과 확정] ===");
+  appendLog(`★ 1등: ${winners[0].name}`);
+  appendLog(`★ 2등: ${winners[1].name}`);
+
+  document.getElementById("status-text").className = "badge";
+  document.getElementById("status-text").textContent = "검증 완료";
+  document.getElementById("status-text").style.background = "#10b981";
+  document.getElementById("winner-area").style.display = "block";
+  document.getElementById("winner-list").innerHTML = `
+    <div><strong>1등:</strong> ${winners[0].name}</div>
+    <div><strong>2등:</strong> ${winners[1].name}</div>
+  `;
+}
+
+async function findExactFirstBlock() {
+  let url = "https://blockstream.info/api/blocks";
+  
+  while (true) {
+    const res = await fetch(url);
+    const blocks = await res.json();
+    if (!blocks || blocks.length === 0) return null;
+
+    blocks.sort((a, b) => a.height - b.height);
+    const oldestInWindow = blocks[0];
+    const newestInWindow = blocks[blocks.length - 1];
+
+    if (newestInWindow.timestamp < TARGET_UNIX_TIMESTAMP) return null;
+
+    if (oldestInWindow.timestamp < TARGET_UNIX_TIMESTAMP) {
+      for (const b of blocks) {
+        if (b.timestamp >= TARGET_UNIX_TIMESTAMP) return b;
+      }
+    }
+
+    url = `https://blockstream.info/api/blocks/${oldestInWindow.height}`;
+  }
+}
+
+let isFinished = false;
+async function checkChain() {
+  if (isFinished) return;
+  try {
+    const tipRes = await fetch("https://blockstream.info/api/blocks/tip/height");
+    const currentTipHeight = parseInt(await tipRes.text(), 10);
+
+    const targetBlock = await findExactFirstBlock();
+
+    if (!targetBlock) {
+      const nowStr = new Date().toLocaleTimeString();
+      document.getElementById("status-text").className = "badge";
+      document.getElementById("status-text").textContent = `04:10 이후 신규 채굴 대기 중 (${nowStr})`;
+      return;
+    }
+
+    const confirmations = currentTipHeight - targetBlock.height + 1;
+    if (confirmations < 2) {
+      document.getElementById("status-text").className = "badge warn-badge";
+      document.getElementById("status-text").textContent = `후속 블록 대기 중 (컨펌: ${confirmations}/2)`;
+      document.getElementById("block-info").innerHTML = `
+        후보 블록 발견: #${targetBlock.height} (안전 컨펌 대기 중)
+      `;
+      return;
+    }
+
+    isFinished = true;
+    document.getElementById("block-info").innerHTML = `
+      <strong>확정 블록:</strong> #${targetBlock.height}<br>
+      <strong>블록 해시:</strong> <small>${targetBlock.id}</small><br>
+      <strong>표시 시각:</strong> ${new Date(targetBlock.timestamp * 1000).toLocaleString()}<br>
+      <strong>누적 컨펌 수:</strong> ${confirmations} Confirmed
+    `;
+
+    await executeLottery(targetBlock.id);
+  } catch (err) {
+    appendLog(`[통신 대기] 체인 상태 확인 중... (${err.message})`);
+  }
+}
+
+checkChain();
+const timer = setInterval(() => {
+  if (isFinished) clearInterval(timer);
+  else checkChain();
+}, 15000);
+</script>
+</body>
+</html>
